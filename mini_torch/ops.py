@@ -3,6 +3,16 @@ from typing import Any, Optional, Tuple
 from .tensor import Tensor, as_tensor
 
 
+def _unbroadcast(grad: np.ndarray, shape: Tuple[int, ...]) -> np.ndarray:
+    """Sum grad along broadcasted axes so it matches the given shape."""
+    while grad.ndim > len(shape):
+        grad = grad.sum(axis=0)
+    for i, (gs, s) in enumerate(zip(grad.shape, shape)):
+        if s == 1 and gs != 1:
+            grad = grad.sum(axis=i, keepdims=True)
+    return np.array(grad, dtype=np.float32)
+
+
 """
 Context object used to store information needed for backward computation.
 
@@ -60,16 +70,12 @@ class Function:
         """
         parents = tuple(as_tensor(x) for x in inputs)
         req = any(p.requires_grad for p in parents)
-        # TODO:
-        # 1) Create a Context Object, run cls.forward(ctx, ...) to compute the output value. 
-            # The forward method in its subclass will compute the forward pass and store necessary information for backward in the Context Object.
-            # Make sure to pass the raw data (np.ndarray) instead of Tensor to the forward method for numerical computation.
-        
-        # 2）Create the output Tensor (set data and requires_grad appropriately).
-        
-        # 3) Create the computation-graph node appropriately and attach it to the output Tensor (.grad_fn).
-            # Note cls(the first argument) is the subclass of Function, so you can create the node by cls(...), with appropriate parameters.
-        raise NotImplementedError
+        ctx = Context()
+        out_data = cls.forward(ctx, *[p.data for p in parents])
+        out = Tensor(np.array(out_data, dtype=np.float32), requires_grad=req)
+        if req:
+            out.grad_fn = cls(ctx, parents)
+        return out
 
 
 # ===== Functions (ops) =====
@@ -94,8 +100,8 @@ class Add(Function):
     """
     @staticmethod
     def forward(ctx, a, b):
-        # TODO: implement forward
-        raise NotImplementedError
+        ctx.save_values(a.shape, b.shape)
+        return np.array(a + b, dtype=np.float32)
     """
     Backward:
         Inputs:
@@ -110,8 +116,10 @@ class Add(Function):
     """
     @staticmethod
     def backward(ctx, grad_out):
-        # TODO: implement backward
-        raise NotImplementedError
+        a_shape, b_shape = ctx.saved_values
+        grad_a = _unbroadcast(grad_out, a_shape)
+        grad_b = _unbroadcast(grad_out, b_shape)
+        return grad_a, grad_b
 
 class Pow(Function):
     """
@@ -134,8 +142,10 @@ class Pow(Function):
     """
     @staticmethod
     def forward(ctx, a, b):
-        # TODO: implement forward
-        raise NotImplementedError
+        out = np.power(a, b).astype(np.float32)
+        ctx.save_for_backward(a, b, out)
+        ctx.save_values(a.shape, b.shape)
+        return out
 
     """
     Backward:
@@ -151,8 +161,16 @@ class Pow(Function):
     """
     @staticmethod
     def backward(ctx, grad_out):
-        # TODO: implement backward
-        raise NotImplementedError
+        a, b, out = ctx.saved_tensors
+        a_shape, b_shape = ctx.saved_values
+        grad_a = grad_out * b * np.power(a, b - 1.0)
+        log_a = np.full_like(a, np.nan, dtype=np.float32)
+        pos_mask = a > 0
+        log_a[pos_mask] = np.log(a[pos_mask]).astype(np.float32)
+        grad_b = grad_out * out * log_a
+        grad_a = _unbroadcast(grad_a, a_shape)
+        grad_b = _unbroadcast(grad_b, b_shape)
+        return grad_a, grad_b
 
 class Mul(Function):
     @staticmethod
@@ -175,8 +193,9 @@ class Mul(Function):
             - May store intermediate information in the Context object (ctx) that is
             required to compute gradients during the backward pass.
         """
-        # TODO: implement forward
-        raise NotImplementedError
+        ctx.save_for_backward(a, b)
+        ctx.save_values(a.shape, b.shape)
+        return np.array(a * b, dtype=np.float32)
 
     @staticmethod
     def backward(ctx, grad_out):
@@ -192,8 +211,11 @@ class Mul(Function):
                 Gradients with respect to inputs a and b. Each gradient has
                 the same shape as its corresponding input.
         """
-        # TODO: implement backward
-        raise NotImplementedError
+        a, b = ctx.saved_tensors
+        a_shape, b_shape = ctx.saved_values
+        grad_a = _unbroadcast(grad_out * b, a_shape)
+        grad_b = _unbroadcast(grad_out * a, b_shape)
+        return grad_a, grad_b
 
 
 class Neg(Function):
@@ -214,8 +236,7 @@ class Neg(Function):
             - May store intermediate information in the Context object (ctx) that is
             required to compute gradients during the backward pass.
         """
-        # TODO: implement forward
-        raise NotImplementedError
+        return np.array(-x, dtype=np.float32)
 
     @staticmethod
     def backward(ctx, grad_out):
@@ -230,8 +251,7 @@ class Neg(Function):
             Tuple[np.ndarray]:
                 Gradient with respect to input x, with the same shape as x.
         """
-        # TODO: implement backward
-        raise NotImplementedError
+        return (np.array(-grad_out, dtype=np.float32),)
 
 
 class MatMul(Function):
@@ -254,8 +274,9 @@ class MatMul(Function):
             - May store intermediate information in the Context object (ctx) that is
             required to compute gradients during the backward pass.
         """
-        # TODO: implement forward
-        raise NotImplementedError
+        ctx.save_for_backward(a, b)
+        ctx.save_values(a.shape, b.shape, a.ndim, b.ndim)
+        return np.matmul(a, b).astype(np.float32)
 
     @staticmethod
     def backward(ctx, grad_out):
@@ -273,8 +294,36 @@ class MatMul(Function):
         Note:
             You might find np.swapaxes useful here.
         """
-        # TODO: implement backward
-        raise NotImplementedError
+        a, b = ctx.saved_tensors
+        a_shape, b_shape, a_ndim, b_ndim = ctx.saved_values
+
+        a_mat = a[np.newaxis, :] if a_ndim == 1 else a
+        b_mat = b[..., np.newaxis] if b_ndim == 1 else b
+
+        if a_ndim == 1 and b_ndim == 1:
+            grad_mat = np.array(grad_out, dtype=np.float32).reshape(1, 1)
+        elif a_ndim == 1:
+            grad_mat = np.expand_dims(grad_out, axis=-2)
+        elif b_ndim == 1:
+            grad_mat = np.expand_dims(grad_out, axis=-1)
+        else:
+            grad_mat = grad_out
+
+        grad_a = np.matmul(grad_mat, np.swapaxes(b_mat, -1, -2))
+        grad_b = np.matmul(np.swapaxes(a_mat, -1, -2), grad_mat)
+
+        a_mat_shape = (1,) + a_shape if a_ndim == 1 else a_shape
+        b_mat_shape = b_shape + (1,) if b_ndim == 1 else b_shape
+
+        grad_a = _unbroadcast(grad_a, a_mat_shape)
+        grad_b = _unbroadcast(grad_b, b_mat_shape)
+
+        if a_ndim == 1:
+            grad_a = np.squeeze(grad_a, axis=0)
+        if b_ndim == 1:
+            grad_b = np.squeeze(grad_b, axis=-1)
+
+        return np.array(grad_a, dtype=np.float32), np.array(grad_b, dtype=np.float32)
 
 #Example ops.
 class Sum(Function):
@@ -307,8 +356,8 @@ class Mean(Function):
             - May store intermediate information in the Context object (ctx) that is
             required to compute gradients during the backward pass.
         """
-        # TODO: implement forward
-        raise NotImplementedError
+        ctx.save_values(x.shape, x.size)
+        return np.array(x.mean(), dtype=np.float32)
 
     @staticmethod
     def backward(ctx, grad_out):
@@ -323,8 +372,9 @@ class Mean(Function):
             Tuple[np.ndarray]:
                 Gradient with respect to input x, with the same shape as x.
         """
-        # TODO: implement backward
-        raise NotImplementedError
+        shape, size = ctx.saved_values
+        grad = np.ones(shape, dtype=np.float32) * (grad_out / np.float32(size))
+        return (np.array(grad, dtype=np.float32),)
 
 
 class ReLU(Function):
@@ -345,8 +395,9 @@ class ReLU(Function):
             - May store intermediate information in the Context object (ctx) that is
             required to compute gradients during the backward pass.
         """
-        # TODO: implement forward
-        raise NotImplementedError
+        mask = x > 0
+        ctx.save_for_backward(mask)
+        return np.maximum(x, 0).astype(np.float32)
 
     @staticmethod
     def backward(ctx, grad_out):
@@ -361,8 +412,8 @@ class ReLU(Function):
             Tuple[np.ndarray]:
                 Gradient with respect to input x.
         """
-        # TODO: implement backward
-        raise NotImplementedError
+        (mask,) = ctx.saved_tensors
+        return (np.array(grad_out * mask, dtype=np.float32),)
 
 
 class Sigmoid(Function):
@@ -394,8 +445,8 @@ class Sigmoid(Function):
             Tuple[np.ndarray]:
                 Gradient with respect to input x.
         """
-        # TODO: implement backward
-        raise NotImplementedError
+        (out,) = ctx.saved_tensors
+        return (np.array(grad_out * out * (1.0 - out), dtype=np.float32),)
     
     
 class CrossEntropy(Function):

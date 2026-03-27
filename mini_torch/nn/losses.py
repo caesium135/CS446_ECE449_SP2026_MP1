@@ -39,5 +39,5 @@ class MSELoss(Module):
         Note:
             - Does not modify `pred` or `target` in-place.
         """
-        #TODO: implement MSE loss
-        raise NotImplementedError
+        target_t = target if isinstance(target, Tensor) else Tensor(target, requires_grad=False)
+        return ((pred - target_t) ** 2).mean()
