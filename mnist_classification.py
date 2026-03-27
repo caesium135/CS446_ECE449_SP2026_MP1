@@ -14,7 +14,7 @@ import mini_torch.nn as nn
 from mini_torch.utils.data import TensorDataset, DataLoader
 from mini_torch.optim import SGD
 from mini_torch import Tensor
-from mini_torch.nn import CrossEntropyLoss
+from mini_torch.nn import MSELoss
 
 # =========================
 # MNIST loader
@@ -70,6 +70,7 @@ class MNISTMLP(nn.Module):
         self.fc2 = nn.Linear(256, 128)
         self.relu2 = nn.ReLU()
         self.fc3 = nn.Linear(128, 10)
+        self.out = nn.Sigmoid()
 
     def forward(self, x: Tensor) -> Tensor:
         x = self.fc1(x)
@@ -77,6 +78,7 @@ class MNISTMLP(nn.Module):
         x = self.fc2(x)
         x = self.relu2(x)
         x = self.fc3(x)
+        x = self.out(x)
         return x
 
 
@@ -99,17 +101,16 @@ def main():
     Xtr_t = torch.tensor(Xtr, requires_grad=False)
     ytr_t = torch.tensor(ytr_oh, requires_grad=False)
     train_ds = TensorDataset(Xtr_t, ytr_t)
-    train_dl = DataLoader(train_ds, batch_size=128, shuffle=True)
+    train_dl = DataLoader(train_ds, batch_size=128, shuffle=True, seed=0)
 
     # ============================================================
     # TODO: instantiate model / loss / optimizer
     # ============================================================
     model = MNISTMLP()
-    criterion = CrossEntropyLoss()
-    opt = SGD(model.parameters(), lr=0.1)
+    criterion = MSELoss()
+    opt = SGD(model.parameters(), lr=0.3)
 
     Xte_t = torch.tensor(Xte, requires_grad=False)
-    yte_t = torch.tensor(yte_oh, requires_grad=False)
 
     epochs = 10  # you can change this if you want
 
@@ -130,9 +131,7 @@ def main():
         te_acc = accuracy_from_logits(te_logits, yte)
         last_te_acc = te_acc
 
-        shifted = te_logits - np.max(te_logits, axis=1, keepdims=True)
-        log_probs = shifted - np.log(np.sum(np.exp(shifted), axis=1, keepdims=True))
-        te_loss = -np.mean(np.sum(yte_oh * log_probs, axis=1))
+        te_loss = np.mean((te_logits - yte_oh) ** 2)
 
         print(f"Epoch {ep:02d}/{epochs} | test_loss={te_loss:.4f} | test_acc={te_acc:.4f}")
 
