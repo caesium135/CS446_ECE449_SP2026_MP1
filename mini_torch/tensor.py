@@ -134,6 +134,65 @@ class Tensor:
         if self.data.size != 1:
             raise ValueError("backward() can only be called on a scalar Tensor.")
 
-            
-        raise NotImplementedError
+        visited: Set["Tensor"] = set()
+        topo: List["Tensor"] = []
 
+        def dfs(t: "Tensor") -> None:
+            if t in visited:
+                return
+            visited.add(t)
+            if t.grad_fn is not None:
+                for parent in t.grad_fn.parents:
+                    dfs(parent)
+            topo.append(t)
+
+        dfs(self)
+
+        seed = np.ones_like(self.data, dtype=np.float32)
+
+        if self.grad_fn is None:
+            if self.grad is None:
+                self.grad = seed
+            else:
+                self.grad = (self.grad + seed).astype(np.float32)
+            return
+
+        grads = {self: seed}
+
+        for t in reversed(topo):
+            node = t.grad_fn
+            if node is None:
+                continue
+
+            grad_out = grads.get(t)
+            if grad_out is None:
+                continue
+
+            parent_grads = node.backward(node.ctx, grad_out)
+            for parent, parent_grad in zip(node.parents, parent_grads):
+                if parent_grad is None or not parent.requires_grad:
+                    continue
+
+                grad = np.array(parent_grad, dtype=np.float32)
+                if parent.grad_fn is None:
+                    if parent.grad is None:
+                        parent.grad = grad
+                    else:
+                        parent.grad = (parent.grad + grad).astype(np.float32)
+                else:
+                    if parent in grads:
+                        grads[parent] = (grads[parent] + grad).astype(np.float32)
+                    else:
+                        grads[parent] = grad
+
+        for t in topo:
+            if t.grad_fn is None:
+                continue
+            node = t.grad_fn
+            t.grad = None
+            t.grad_fn = None
+            node.parents = ()
+            if node.ctx is not None:
+                node.ctx.saved_tensors = ()
+                node.ctx.saved_values = ()
+            node.ctx = None

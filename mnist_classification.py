@@ -65,12 +65,19 @@ class MNISTMLP(nn.Module):
     #You can pass in any arguments you want to the constructor.
     def __init__(self,):
         super().__init__()
-        # TODO: define layers
-        raise NotImplementedError
+        self.fc1 = nn.Linear(784, 256)
+        self.relu1 = nn.ReLU()
+        self.fc2 = nn.Linear(256, 128)
+        self.relu2 = nn.ReLU()
+        self.fc3 = nn.Linear(128, 10)
 
     def forward(self, x: Tensor) -> Tensor:
-        # TODO: implement forward
-        raise NotImplementedError
+        x = self.fc1(x)
+        x = self.relu1(x)
+        x = self.fc2(x)
+        x = self.relu2(x)
+        x = self.fc3(x)
+        return x
 
 
 def main():
@@ -97,10 +104,9 @@ def main():
     # ============================================================
     # TODO: instantiate model / loss / optimizer
     # ============================================================
-    raise NotImplementedError
-    # model = ...
+    model = MNISTMLP()
     criterion = CrossEntropyLoss()
-    # opt = ...
+    opt = SGD(model.parameters(), lr=0.1)
 
     Xte_t = torch.tensor(Xte, requires_grad=False)
     yte_t = torch.tensor(yte_oh, requires_grad=False)
@@ -114,7 +120,11 @@ def main():
     # ============================================================
     for ep in range(1, epochs + 1):
         for xb, yb in train_dl:
-            raise NotImplementedError
+            pred = model(xb)
+            loss = criterion(pred, yb)
+            opt.zero_grad()
+            loss.backward()
+            opt.step()
 
         te_logits = model(Xte_t).detach().numpy()
         te_acc = accuracy_from_logits(te_logits, yte)

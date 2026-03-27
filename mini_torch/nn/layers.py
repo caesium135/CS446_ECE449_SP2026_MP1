@@ -36,9 +36,17 @@ class Linear(Module):
         """
         super().__init__()
 
-        # TODO: define weight parameter as a member of this class instance (E.g., self.weights). It will be used in forward()
-        # TODO: define bias parameter as a member of this class instance (E.g., self.bias) (if bias=True). It will be used in forward()
-        raise NotImplementedError
+        limit = np.sqrt(6.0 / float(in_features + out_features))
+        weight = np.random.uniform(
+            -limit, limit, size=(in_features, out_features)
+        ).astype(np.float32)
+        self.weight = Tensor(weight, requires_grad=True)
+
+        if bias:
+            bias_data = np.random.uniform(-limit, limit, size=(out_features,)).astype(np.float32)
+            self.bias = Tensor(bias_data, requires_grad=True)
+        else:
+            self.bias = None
 
     def forward(self, x: Tensor) -> Tensor:
         """
@@ -55,5 +63,7 @@ class Linear(Module):
         Note:
             - Does not modify the input tensor, the weight and the bias in-place.
         """
-        #TODO: - Compute the output of the linear layer using the input tensor, parameters(the weight and bias), and tensor operations.
-        raise NotImplementedError
+        out = x @ self.weight
+        if self.bias is not None:
+            out = out + self.bias
+        return out
